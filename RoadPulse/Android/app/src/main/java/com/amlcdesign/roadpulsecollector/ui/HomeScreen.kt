@@ -7,11 +7,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.amlcdesign.roadpulsecollector.manager.RideManager
+import androidx.compose.ui.platform.LocalContext
+
 
 @Composable
 fun HomeScreen() {
 
-    val rideManager = remember { RideManager() }
+    val context = LocalContext.current
+
+    val rideManager = remember {
+        RideManager(context)
+    }
 
     var isRecording by remember {
         mutableStateOf(false)

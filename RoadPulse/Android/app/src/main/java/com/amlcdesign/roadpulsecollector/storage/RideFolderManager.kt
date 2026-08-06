@@ -1,15 +1,15 @@
 package com.amlcdesign.roadpulsecollector.storage
 
 import android.content.Context
+import com.amlcdesign.roadpulsecollector.model.Ride
+import com.google.gson.Gson
 import java.io.File
 
 class RideFolderManager(
     private val context: Context
 ) {
 
-    fun createRideFolder(
-        rideId: String
-    ): File {
+    fun createRideFolder(ride: Ride): File {
 
         val root = File(
             context.getExternalFilesDir(null),
@@ -19,14 +19,19 @@ class RideFolderManager(
         if (!root.exists())
             root.mkdirs()
 
-        val rideFolder = File(
+        val folder = File(
             root,
-            rideId
+            "RP_${ride.rideId}"
         )
 
-        if (!rideFolder.exists())
-            rideFolder.mkdirs()
+        if (!folder.exists())
+            folder.mkdirs()
 
-        return rideFolder
+        val json = Gson().toJson(ride)
+
+        File(folder, "ride.json")
+            .writeText(json)
+
+        return folder
     }
 }
