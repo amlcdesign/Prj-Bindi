@@ -21,7 +21,7 @@ class RideFolderManager(
 
         val folder = File(
             root,
-            "RP_${ride.rideId}"
+            ride.rideId
         )
 
         if (!folder.exists())
@@ -33,5 +33,29 @@ class RideFolderManager(
             .writeText(json)
 
         return folder
+    }
+
+    fun updateRide(ride: Ride) {
+
+        val root = File(
+            context.getExternalFilesDir(null),
+            "RoadPulse"
+        )
+
+        val folder = File(
+            root,
+            ride.rideId
+        )
+
+        if (!folder.exists()) {
+            folder.mkdirs()
+        }
+
+        val json = Gson().toJson(ride)
+
+        File(
+            folder,
+            "ride.json"
+        ).writeText(json)
     }
 }

@@ -10,12 +10,17 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.*
 import com.amlcdesign.roadpulsecollector.enums.RideStatus
+import com.amlcdesign.roadpulsecollector.model.GpsRecord
+import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
+import java.io.File
+
 
 class RideManager(
     private val context: Context
 ) {
 
     private var currentRide: Ride? = null
+    private var gpsCsvWriter: GpsCsvWriter? = null
 
     fun startRide(): Ride {
 
@@ -41,6 +46,23 @@ class RideManager(
         RideFolderManager(context)
             .createRideFolder(ride)
 
+        val rideFolder =
+            File(
+                context.getExternalFilesDir(null),
+                "RoadPulse/${ride.rideId}"
+            )
+
+        val gpsFile =
+            File(
+                rideFolder,
+                "gps.csv"
+            )
+
+        gpsCsvWriter =
+            GpsCsvWriter(gpsFile)
+
+        gpsCsvWriter?.initialize()
+
         currentRide = ride
 
         Log.d(
@@ -53,21 +75,50 @@ class RideManager(
 
     fun stopRide() {
 
-        currentRide?.endEpoch = System.currentTimeMillis()
+        currentRide?.let { ride ->
 
-        currentRide?.endIso =
-            OffsetDateTime.now()
-                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+            ride.endEpoch =
+                System.currentTimeMillis()
 
-        currentRide?.status = RideStatus.COMPLETED
+            ride.endIso =
+                OffsetDateTime.now()
+                    .format(
+                        DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                    )
 
-        currentRide?.durationSeconds =
-            ((currentRide!!.endEpoch!! - currentRide!!.startEpoch) / 1000).toInt()
+            ride.status =
+                RideStatus.COMPLETED
 
-        Log.d(
-            "RoadPulse",
-            "Ride Stopped"
-        )
+            ride.durationSeconds =
+                (
+                        (ride.endEpoch!! - ride.startEpoch)
+                                / 1000
+                        ).toInt()
+
+            RideFolderManager(context)
+                .updateRide(ride)
+
+            Log.d(
+                "RoadPulse",
+                "Ride Completed : ${ride.rideId}"
+            )
+        }
+
+        gpsCsvWriter = null
+    }
+
+    fun incrementGpsPointCount() {
+
+        currentRide?.gpsPoints =
+            currentRide!!.gpsPoints + 1
+    }
+
+    fun recordGps(record: GpsRecord) {
+
+        gpsCsvWriter?.write(record)
+
+        currentRide?.gpsPoints =
+            (currentRide?.gpsPoints ?: 0) + 1
     }
 
     fun getCurrentRide() = currentRide
