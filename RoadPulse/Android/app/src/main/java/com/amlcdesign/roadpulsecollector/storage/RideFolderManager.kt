@@ -21,7 +21,7 @@ class RideFolderManager(
 
         val folder = File(
             root,
-            ride.rideId
+            ride.ride.rideId
         )
 
         if (!folder.exists())
@@ -44,7 +44,7 @@ class RideFolderManager(
 
         val folder = File(
             root,
-            ride.rideId
+            ride.ride.rideId
         )
 
         if (!folder.exists()) {

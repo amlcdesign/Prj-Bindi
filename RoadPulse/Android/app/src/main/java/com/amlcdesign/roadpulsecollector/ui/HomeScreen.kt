@@ -14,16 +14,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.amlcdesign.roadpulsecollector.gps.GpsManager
-import com.amlcdesign.roadpulsecollector.manager.RideManager
+import com.amlcdesign.roadpulsecollector.manager.RideController
+import com.amlcdesign.roadpulsecollector.enums.RideMode
+import com.amlcdesign.roadpulsecollector.manager.AutoRideMonitor
+import com.amlcdesign.roadpulsecollector.enums.VehicleType
 
 @Composable
 fun HomeScreen() {
 
     val context = LocalContext.current
 
-    val rideManager = remember {
-        RideManager(context)
+    val rideController = remember {
+        RideController(context)
     }
+
+
 
     var isRecording by remember {
         mutableStateOf(false)
@@ -49,13 +54,48 @@ fun HomeScreen() {
         mutableStateOf("--")
     }
 
+    var rideMode by remember {
+        mutableStateOf(RideMode.MANUAL)
+    }
+
+    var vehicleType by remember {
+        mutableStateOf(VehicleType.CAR)
+    }
+
+    //RideController can automatically start the ride,
+    // but HomeScreen doesn't know that happened.
+    // we need to tell HomeScreen when the ride starts.
+    LaunchedEffect(Unit) {
+
+        rideController.setOnRideStarted { ride ->
+
+            rideId = ride.ride.rideId
+
+            isRecording = true
+        }
+    }
+
+    val autoRideMonitor = remember {
+
+        AutoRideMonitor {
+
+            rideController.setMode(
+                RideMode.AUTO
+            )
+
+            val ride = rideController.startRide()
+
+            rideId = ride.ride.rideId
+
+            isRecording = true
+        }
+    }
+
     val gpsManager = remember {
 
         GpsManager(
             context = context
         ) { record ->
-
-            rideManager.recordGps(record)
 
             latitude =
                 String.format(
@@ -80,6 +120,26 @@ fun HomeScreen() {
                     "%.1f m",
                     record.accuracyMeters
                 )
+
+            // AUTO MODE:
+            // monitor movement before ride starts
+            if (
+                rideMode == RideMode.AUTO &&
+                !isRecording
+            ) {
+
+                autoRideMonitor.processLocation(
+                    record
+                )
+            }
+
+            // Record GPS only after ride starts
+            if (isRecording) {
+
+                rideController.recordGps(
+                    record
+                )
+            }
         }
     }
 
@@ -140,7 +200,110 @@ fun HomeScreen() {
             )
 
             Spacer(
-                modifier = Modifier.height(12.dp)
+                modifier = Modifier.height(16.dp)
+            )
+
+            Text(
+                text = "Vehicle",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+
+                RadioButton(
+                    selected = vehicleType == VehicleType.CAR,
+                    onClick = {
+                        if (!isRecording) {
+                            vehicleType = VehicleType.CAR
+                        }
+                    }
+                )
+
+                Text("Car")
+
+                Spacer(
+                    modifier = Modifier.width(16.dp)
+                )
+
+                RadioButton(
+                    selected = vehicleType == VehicleType.BIKE,
+                    onClick = {
+                        if (!isRecording) {
+                            vehicleType = VehicleType.BIKE
+                        }
+                    }
+                )
+
+                Text("Bike")
+            }
+
+            Text(
+                text = "Ride Mode",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+
+                // mode can only be changed while the app is idle.
+                RadioButton(
+                    selected = rideMode == RideMode.AUTO,
+                    onClick = {
+
+                        if (!isRecording) {
+
+                            rideMode = RideMode.AUTO
+
+                            val hasPermission =
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+
+                            if (rideMode == RideMode.MANUAL) {
+                                if (hasPermission) {
+                                    //if AUTO GPS is already started
+                                    gpsManager.start()
+                                } else {
+                                    locationPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            }
+
+                        }
+                    }
+                )
+
+                Text("Auto Mode")
+
+                Spacer(
+                    modifier = Modifier.width(16.dp)
+                )
+
+                RadioButton(
+                    selected = rideMode == RideMode.MANUAL,
+                    onClick = {
+
+                        if (!isRecording) {
+                            rideMode = RideMode.MANUAL
+                            autoRideMonitor.stop()
+                            gpsManager.stop()
+                        }
+                    }
+                )
+
+                Text("Manual Mode")
+            }
+
+            Spacer(
+                modifier = Modifier.height(16.dp)
             )
 
             Text("Ride ID")
@@ -187,10 +350,14 @@ fun HomeScreen() {
                             Manifest.permission.ACCESS_FINE_LOCATION
                         ) == PackageManager.PERMISSION_GRANTED
 
-                    val ride =
-                        rideManager.startRide()
+                    rideController.setMode(rideMode)
 
-                    rideId = ride.rideId
+                    val ride =
+                        rideController.startRide(
+                            vehicleType = vehicleType
+                        )
+
+                    rideId = ride.ride.rideId
 
                     isRecording = true
 
@@ -226,7 +393,7 @@ fun HomeScreen() {
 
                     gpsManager.stop()
 
-                    rideManager.stopRide()
+                    rideController.stopRide()
 
                     isRecording = false
                 }
