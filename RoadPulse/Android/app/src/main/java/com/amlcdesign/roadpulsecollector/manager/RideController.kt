@@ -41,13 +41,14 @@ class RideController(
             vehicleType = vehicleType
         )
 
+        rideManager.startAccelerometer()
         onRideStarted?.invoke(ride)
 
         return ride
     }
 
     fun stopRide() {
-
+        rideManager.stopAccelerometer()
         rideManager.stopRide()
     }
 

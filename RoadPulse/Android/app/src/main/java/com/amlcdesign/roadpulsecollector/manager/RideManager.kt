@@ -2,14 +2,9 @@ package com.amlcdesign.roadpulsecollector.manager
 
 import android.content.Context
 import android.util.Log
-import com.amlcdesign.roadpulsecollector.enums.RideMode
-import com.amlcdesign.roadpulsecollector.enums.RideStatus
-import com.amlcdesign.roadpulsecollector.model.DataInfo
-import com.amlcdesign.roadpulsecollector.model.GpsRecord
-import com.amlcdesign.roadpulsecollector.model.Ride
-import com.amlcdesign.roadpulsecollector.model.RideInfo
-import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
-import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
+import android.os.Build
+import android.provider.Settings
+
 import java.io.File
 import java.text.SimpleDateFormat
 import java.time.OffsetDateTime
@@ -17,11 +12,27 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import android.os.Build
-import android.provider.Settings
+
 import com.amlcdesign.roadpulsecollector.model.DeviceInfo
+import com.amlcdesign.roadpulsecollector.model.DataInfo
+
+import com.amlcdesign.roadpulsecollector.enums.RideStatus
+import com.amlcdesign.roadpulsecollector.model.Ride
+import com.amlcdesign.roadpulsecollector.model.RideInfo
+import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
+import com.amlcdesign.roadpulsecollector.enums.RideMode
+
+import com.amlcdesign.roadpulsecollector.model.GpsRecord
+import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
+
 import com.amlcdesign.roadpulsecollector.enums.VehicleType
 import com.amlcdesign.roadpulsecollector.model.VehicleInfo
+
+import com.amlcdesign.roadpulsecollector.model.EventRecord
+import com.amlcdesign.roadpulsecollector.storage.EventsCsvWriter
+
+import com.amlcdesign.roadpulsecollector.sensor.AccelerometerManager
+import com.amlcdesign.roadpulsecollector.storage.AccelerometerCsvWriter
 
 class RideManager(
     private val context: Context
@@ -30,7 +41,10 @@ class RideManager(
     private var currentRide: Ride? = null
 
     private var gpsCsvWriter: GpsCsvWriter? = null
+    private var eventsCsvWriter: EventsCsvWriter? = null
 
+    private var accelerometerManager: AccelerometerManager? = null
+    private var accelerometerCsvWriter: AccelerometerCsvWriter? = null
 
     // =========================================================
     // START RIDE
@@ -104,6 +118,46 @@ class RideManager(
 
         gpsCsvWriter?.initialize()
 
+        // ---------------------------------------------------------
+        // Create EVENTS CSV
+        // ---------------------------------------------------------
+        val eventsFile =
+            File(
+                rideFolder,
+                "events.csv"
+            )
+
+        eventsCsvWriter =
+            EventsCsvWriter(eventsFile)
+
+        eventsCsvWriter?.initialize()
+
+        // ---------------------------------------------------------
+        // Create ACCELEROMETER Section
+        // ---------------------------------------------------------
+
+        val accelerometerFile =
+            File(
+                rideFolder,
+                "accelerometer.csv"
+            )
+
+        accelerometerCsvWriter =
+            AccelerometerCsvWriter(
+                accelerometerFile
+            )
+
+        accelerometerCsvWriter?.initialize()
+
+        //Manager
+        accelerometerManager =
+            AccelerometerManager(context) { record ->
+
+                accelerometerCsvWriter?.write(record)
+
+                currentRide?.data?.accelerometerSamples =
+                    (currentRide?.data?.accelerometerSamples ?: 0) + 1
+            }
 
         // ---------------------------------------------------------
         // Store current ride
@@ -111,6 +165,10 @@ class RideManager(
 
         currentRide = ride
 
+        recordEvent(
+            eventType = "RIDE_STARTED",
+            eventValue = rideMode.name
+        )
 
         Log.d(
             "RoadPulse",
@@ -163,10 +221,18 @@ class RideManager(
                 "RoadPulse",
                 "Ride Completed : ${ride.ride.rideId}"
             )
+
+            recordEvent(
+                eventType = "RIDE_STOPPED",
+                eventValue = ride.ride.stopReason
+            )
+
         }
 
 
+
         gpsCsvWriter = null
+        eventsCsvWriter = null
     }
 
 
@@ -201,6 +267,14 @@ class RideManager(
         }
     }
 
+    fun startAccelerometer() {
+        accelerometerManager?.start()
+    }
+
+    fun stopAccelerometer() {
+        accelerometerManager?.stop()
+        accelerometerManager = null
+    }
 
     // =========================================================
     // CURRENT RIDE
@@ -236,5 +310,27 @@ class RideManager(
         )
     }
 
+    private fun recordEvent(
+        eventType: String,
+        eventValue: String = ""
+    ) {
+
+        val now = System.currentTimeMillis()
+
+        val timestampIso =
+            OffsetDateTime.now()
+                .format(
+                    DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                )
+
+        eventsCsvWriter?.write(
+            EventRecord(
+                timestampEpoch = now,
+                timestampIso = timestampIso,
+                eventType = eventType,
+                eventValue = eventValue
+            )
+        )
+    }
 
 }
