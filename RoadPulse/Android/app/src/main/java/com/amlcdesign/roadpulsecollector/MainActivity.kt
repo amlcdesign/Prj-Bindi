@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.amlcdesign.roadpulsecollector.ui.theme.RoadPulseCollectorTheme
 import com.amlcdesign.roadpulsecollector.ui.HomeScreen
+import com.amlcdesign.roadpulsecollector.ui.RoadPulseApp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -20,7 +21,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             RoadPulseCollectorTheme {
-                HomeScreen()
+                RoadPulseApp()
             }
         }
     }

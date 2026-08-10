@@ -265,6 +265,11 @@ class RideManager(
             it.gpsPoints =
                 it.gpsPoints + 1
         }
+
+        // Update accelerometer sampling profile
+        accelerometerManager?.updateSpeed(
+            record.speedKmh
+        )
     }
 
     fun startAccelerometer() {
