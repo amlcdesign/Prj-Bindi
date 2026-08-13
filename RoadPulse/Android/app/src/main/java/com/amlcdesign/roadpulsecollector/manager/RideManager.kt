@@ -32,6 +32,7 @@ import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
 
 import com.amlcdesign.roadpulsecollector.sensor.AccelerometerManager
 import com.amlcdesign.roadpulsecollector.sensor.GyroscopeManager
+import com.amlcdesign.roadpulsecollector.storage.HistoryManager
 
 import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 
@@ -57,6 +58,9 @@ class RideManager(
     private var currentRide: Ride? = null
 
     private var rideStopping = false
+
+    private val historyManager =
+        HistoryManager(context)
 
 
     // =========================================================
@@ -296,6 +300,7 @@ class RideManager(
 
         currentRide = ride
 
+        historyManager.createHistoryEntry(ride)
 
         // ---------------------------------------------------------
         // RIDE START EVENT
@@ -419,6 +424,10 @@ class RideManager(
         RideFolderManager(context)
             .updateRide(ride)
 
+        // ---------------------------------------------------------
+        // Update History
+        // ---------------------------------------------------------
+        historyManager.updateHistoryEntry(ride)
 
         // ---------------------------------------------------------
         // Release storage references

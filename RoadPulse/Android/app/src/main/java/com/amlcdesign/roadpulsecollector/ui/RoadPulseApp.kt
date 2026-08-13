@@ -42,6 +42,9 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 import com.amlcdesign.roadpulsecollector.R
+import com.amlcdesign.roadpulsecollector.storage.HistoryManager
+
+import androidx.compose.ui.platform.LocalContext
 
 private enum class MainTab {
     HOME,
@@ -132,7 +135,11 @@ fun RoadPulseApp() {
                     }
 
                     MainTab.HISTORY -> {
-                        HistoryPlaceholderScreen()
+                        HistoryScreen(
+                            historyManager = HistoryManager(
+                                LocalContext.current.applicationContext
+                            )
+                        )
                     }
 
                     MainTab.MAP -> {
