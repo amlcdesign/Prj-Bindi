@@ -1,5 +1,6 @@
 package com.amlcdesign.roadpulsecollector.gps
 
+
 import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
@@ -9,6 +10,7 @@ import com.amlcdesign.roadpulsecollector.model.GpsRecord
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 
 class GpsManager(
     private val context: Context,
@@ -104,6 +106,9 @@ class GpsManager(
     @SuppressLint("MissingPermission")
     fun start() {
 
+        RoadPulseLogger.gps(
+            "GPS started"
+        )
         fusedLocationClient.requestLocationUpdates(
             locationRequest,
             locationCallback,
@@ -113,6 +118,9 @@ class GpsManager(
 
     fun stop() {
 
+        RoadPulseLogger.gps(
+            "GPS stopped"
+        )
         fusedLocationClient.removeLocationUpdates(
             locationCallback
         )

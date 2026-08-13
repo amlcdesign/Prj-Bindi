@@ -13,22 +13,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.runtime.DisposableEffect
+import com.amlcdesign.roadpulsecollector.ui.RideControllerViewModel
+
 import com.amlcdesign.roadpulsecollector.gps.GpsManager
+
 import com.amlcdesign.roadpulsecollector.manager.RideController
-import com.amlcdesign.roadpulsecollector.enums.RideMode
 import com.amlcdesign.roadpulsecollector.manager.AutoRideMonitor
+
+import com.amlcdesign.roadpulsecollector.enums.RideMode
+//import com.amlcdesign.roadpulsecollector.enums.StopReason
 import com.amlcdesign.roadpulsecollector.enums.VehicleType
 
+import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 @Composable
-fun HomeScreen() {
+fun HomeScreen( modifier: Modifier = Modifier) {
 
     val context = LocalContext.current
 
-    val rideController = remember {
-        RideController(context)
-    }
+    val rideControllerViewModel: RideControllerViewModel =
+        viewModel()
 
-
+    val rideController =
+        rideControllerViewModel.rideController
 
     var isRecording by remember {
         mutableStateOf(false)
@@ -36,6 +44,10 @@ fun HomeScreen() {
 
     var rideId by remember {
         mutableStateOf("")
+    }
+
+    LaunchedEffect(Unit) {
+        isRecording = rideController.isRideActive()
     }
 
     var latitude by remember {
@@ -65,20 +77,37 @@ fun HomeScreen() {
     //RideController can automatically start the ride,
     // but HomeScreen doesn't know that happened.
     // we need to tell HomeScreen when the ride starts.
+
+    //now that RideController is surviving rotation through the ViewModel,
+    // we should avoid registering the callback repeatedly every time HomeScreen recomposes.
+    /*
     LaunchedEffect(Unit) {
-
         rideController.setOnRideStarted { ride ->
-
             rideId = ride.ride.rideId
-
             isRecording = true
         }
     }
+    */
+
+    RoadPulseLogger.ui(
+        "HomeScreen RideController | hash=${rideController.hashCode()}"
+    )
+
+    DisposableEffect(rideController) {
+        rideController.setOnRideStarted { ride ->
+            rideId = ride.ride.rideId
+            isRecording = true
+        }
+
+        onDispose {
+            // Nothing to clean up yet
+        }
+    }
+
+
 
     val autoRideMonitor = remember {
-
         AutoRideMonitor {
-
             rideController.setMode(
                 RideMode.AUTO
             )
@@ -173,8 +202,8 @@ fun HomeScreen() {
                 .fillMaxSize()
                 .padding(24.dp),
 
-            horizontalAlignment =
-                Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
 
             Spacer(
@@ -338,69 +367,62 @@ fun HomeScreen() {
                 modifier = Modifier.height(32.dp)
             )
 
-            Button(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    enabled = !isRecording,
+                    onClick = {
 
-                enabled = !isRecording,
+                        val hasPermission =
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
 
-                onClick = {
+                        rideController.setMode(rideMode)
 
-                    val hasPermission =
-                        ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.ACCESS_FINE_LOCATION
-                        ) == PackageManager.PERMISSION_GRANTED
-
-                    rideController.setMode(rideMode)
-
-                    val ride =
-                        rideController.startRide(
-                            vehicleType = vehicleType
-                        )
-
-                    rideId = ride.ride.rideId
-
-                    isRecording = true
-
-                    if (hasPermission) {
-
-                        gpsManager.start()
-
-                    } else {
-
-                        locationPermissionLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION
+                        val ride =
+                            rideController.startRide(
+                                vehicleType = vehicleType
                             )
-                        )
+
+                        rideId = ride.ride.rideId
+
+                        isRecording = true
+
+                        if (hasPermission) {
+                            gpsManager.start()
+                        } else {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
                     }
+                ) {
+                    Text("START RIDE")
                 }
 
-            ) {
-
-                Text("START RIDE")
-            }
-
-            Spacer(
-                modifier = Modifier.height(16.dp)
-            )
-
-            OutlinedButton(
-
-                enabled = isRecording,
-
-                onClick = {
-
-                    gpsManager.stop()
-
-                    rideController.stopRide()
-
-                    isRecording = false
+                Button(
+                    enabled = isRecording,
+                    onClick = {
+                        gpsManager.stop()
+                        rideController.stopRide()
+                        isRecording = false
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(52.dp)
+                ) {
+                    Text("STOP RIDE")
                 }
-
-            ) {
-
-                Text("STOP RIDE")
             }
         }
     }

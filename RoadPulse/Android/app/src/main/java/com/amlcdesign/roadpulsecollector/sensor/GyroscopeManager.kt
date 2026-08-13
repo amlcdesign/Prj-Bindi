@@ -5,15 +5,14 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import com.amlcdesign.roadpulsecollector.enums.SensorSamplingProfile
-import com.amlcdesign.roadpulsecollector.model.AccelerometerRecord
+import com.amlcdesign.roadpulsecollector.model.GyroscopeRecord
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 
-class AccelerometerManager(
+class GyroscopeManager(
     context: Context,
-    private val onSample: (AccelerometerRecord) -> Unit
+    private val onSample: (GyroscopeRecord) -> Unit
 ) : SensorEventListener {
 
     private val sensorManager =
@@ -21,58 +20,45 @@ class AccelerometerManager(
             Context.SENSOR_SERVICE
         ) as SensorManager
 
-    private val accelerometer =
+    private val gyroscope =
         sensorManager.getDefaultSensor(
-            Sensor.TYPE_ACCELEROMETER
+            Sensor.TYPE_GYROSCOPE
         )
 
-    private var samplingIntervalMs =
-        SensorSamplingProfile.LOW_SPEED.intervalMs
+    /*
+     * Raw gyro collection only.
+     *
+     * Processing will be implemented later.
+     */
+    private val samplingIntervalMs = 50L
 
     private var lastSampleTimestamp = 0L
     private var isRunning = false
-
-    fun updateSpeed(speedKmh: Float) {
-
-        val profile =
-            SensorSamplingProfile.forSpeed(speedKmh)
-
-        samplingIntervalMs =
-            profile.intervalMs
-
-        RoadPulseLogger.accel(
-            "Speed = ${"%.1f".format(speedKmh)} km/h" +
-                    " | Profile = $profile" +
-                    " | Interval = ${samplingIntervalMs} ms"
-        )
-    }
 
     fun start() {
 
         if (isRunning) {
             return
         }
-        isRunning = true
 
+        if (gyroscope == null) {
+
+            RoadPulseLogger.gyro(
+                "Gyroscope sensor not available"
+            )
+
+            return
+        }
+
+        isRunning = true
         lastSampleTimestamp = 0L
 
-        RoadPulseLogger.accel(
-            "Accelerometer starting"
-        )
-
-        accelerometer?.let { sensor ->
+        gyroscope?.let { sensor ->
 
             sensorManager.registerListener(
                 this,
                 sensor,
                 SensorManager.SENSOR_DELAY_NORMAL
-            )
-            RoadPulseLogger.accel(
-                "Accelerometer registered"
-            )
-        } ?: run {
-            RoadPulseLogger.error(
-                "Accelerometer sensor not available"
             )
         }
     }
@@ -82,23 +68,30 @@ class AccelerometerManager(
         if (!isRunning) {
             return
         }
-        isRunning = false
 
+        isRunning = false
         sensorManager.unregisterListener(this)
+
         lastSampleTimestamp = 0L
-        RoadPulseLogger.accel(
-            "Accelerometer stopped"
+
+
+        RoadPulseLogger.gyro(
+            "Gyroscope stopped"
         )
     }
 
     override fun onSensorChanged(
         event: SensorEvent
     ) {
+
         if (!isRunning) {
             return
         }
 
-        if (event.sensor.type != Sensor.TYPE_ACCELEROMETER) {
+        if (
+            event.sensor.type !=
+            Sensor.TYPE_GYROSCOPE
+        ) {
             return
         }
 
@@ -107,7 +100,8 @@ class AccelerometerManager(
 
         if (
             lastSampleTimestamp != 0L &&
-            now - lastSampleTimestamp < samplingIntervalMs
+            now - lastSampleTimestamp <
+            samplingIntervalMs
         ) {
             return
         }
@@ -121,18 +115,12 @@ class AccelerometerManager(
                 )
 
         onSample(
-            AccelerometerRecord(
-
+            GyroscopeRecord(
                 timestampEpoch = now,
-
                 timestampIso = timestampIso,
-
                 x = event.values[0],
-
                 y = event.values[1],
-
                 z = event.values[2],
-
                 samplingIntervalMs =
                     samplingIntervalMs
             )
@@ -143,6 +131,6 @@ class AccelerometerManager(
         sensor: Sensor?,
         accuracy: Int
     ) {
-        // Not required for current data collection.
+        // Not required for current raw data collection.
     }
 }

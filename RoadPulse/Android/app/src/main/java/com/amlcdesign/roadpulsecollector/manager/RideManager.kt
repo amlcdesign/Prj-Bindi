@@ -17,34 +17,51 @@ import com.amlcdesign.roadpulsecollector.model.DeviceInfo
 import com.amlcdesign.roadpulsecollector.model.DataInfo
 
 import com.amlcdesign.roadpulsecollector.enums.RideStatus
+import com.amlcdesign.roadpulsecollector.enums.RideMode
+import com.amlcdesign.roadpulsecollector.enums.StopReason
+import com.amlcdesign.roadpulsecollector.enums.VehicleType
+
 import com.amlcdesign.roadpulsecollector.model.Ride
 import com.amlcdesign.roadpulsecollector.model.RideInfo
-import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
-import com.amlcdesign.roadpulsecollector.enums.RideMode
-
 import com.amlcdesign.roadpulsecollector.model.GpsRecord
-import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
-
-import com.amlcdesign.roadpulsecollector.enums.VehicleType
 import com.amlcdesign.roadpulsecollector.model.VehicleInfo
-
 import com.amlcdesign.roadpulsecollector.model.EventRecord
+
+import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
+import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
 import com.amlcdesign.roadpulsecollector.storage.EventsCsvWriter
+import com.amlcdesign.roadpulsecollector.storage.AccelerometerCsvWriter
+import com.amlcdesign.roadpulsecollector.storage.GyroscopeCsvWriter
 
 import com.amlcdesign.roadpulsecollector.sensor.AccelerometerManager
-import com.amlcdesign.roadpulsecollector.storage.AccelerometerCsvWriter
+import com.amlcdesign.roadpulsecollector.sensor.GyroscopeManager
 
+import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 class RideManager(
     private val context: Context
 ) {
-
-    private var currentRide: Ride? = null
 
     private var gpsCsvWriter: GpsCsvWriter? = null
     private var eventsCsvWriter: EventsCsvWriter? = null
 
     private var accelerometerManager: AccelerometerManager? = null
     private var accelerometerCsvWriter: AccelerometerCsvWriter? = null
+
+    private var gyroscopeManager: GyroscopeManager? = null
+    private var gyroscopeCsvWriter: GyroscopeCsvWriter? = null
+
+    private var rideStopping = false
+    private var currentRide: Ride? = null
+
+    init {
+        val unfinishedRide = getUnfinishedRide()
+
+        RoadPulseLogger.ride(
+            "RideManager INIT | unfinishedRide=${
+                unfinishedRide?.ride?.rideId ?: "NONE"
+            }"
+        )
+    }
 
     // =========================================================
     // START RIDE
@@ -54,6 +71,15 @@ class RideManager(
         rideMode: RideMode = RideMode.MANUAL,
         vehicleType: VehicleType = VehicleType.CAR
     ): Ride {
+
+        if (isRideActive()) {
+            RoadPulseLogger.ride(
+                "START IGNORED | Ride already active | Ride ID = ${currentRide?.ride?.rideId}"
+            )
+            return currentRide!!
+        }
+
+        rideStopping = false
 
         val id = SimpleDateFormat(
             "yyyyMMdd_HHmmss",
@@ -160,6 +186,33 @@ class RideManager(
             }
 
         // ---------------------------------------------------------
+        // GYROSCOPE Section
+        // ---------------------------------------------------------
+
+        val gyroscopeFile =
+            File(
+                rideFolder,
+                "gyroscope.csv"
+            )
+
+        gyroscopeCsvWriter =
+            GyroscopeCsvWriter(
+                gyroscopeFile
+            )
+
+        gyroscopeCsvWriter?.initialize()
+
+        // Manager
+        gyroscopeManager =
+            GyroscopeManager(context) { record ->
+
+                gyroscopeCsvWriter?.write(record)
+
+                currentRide?.data?.gyroscopeSamples =
+                    (currentRide?.data?.gyroscopeSamples ?: 0) + 1
+            }
+
+        // ---------------------------------------------------------
         // Store current ride
         // ---------------------------------------------------------
 
@@ -170,10 +223,18 @@ class RideManager(
             eventValue = rideMode.name
         )
 
-        Log.d(
-            "RoadPulse",
+        RoadPulseLogger.ride(
             "Ride Started : ${ride.ride.rideId}"
         )
+
+        // ---------------------------------------------------------
+        // Start accelerometer
+        // Start gyroscope
+        // Storage + currentRide are now ready
+        // ---------------------------------------------------------
+
+        startAccelerometer()
+        startGyroscope()
 
         return ride
     }
@@ -183,7 +244,28 @@ class RideManager(
     // STOP RIDE
     // =========================================================
 
-    fun stopRide() {
+    fun stopRide(stopReason: StopReason) {
+
+        RoadPulseLogger.ride(
+            "STOP RIDE CALLED | reason=$stopReason"
+        )
+
+        if (currentRide == null) {
+            RoadPulseLogger.ride(
+                "STOP IGNORED | No current ride | Reason = ${stopReason.name}"
+            )
+            return
+        }
+        if (rideStopping) {
+            RoadPulseLogger.ride(
+                "STOP IGNORED | No current ride | Reason = ${stopReason.name}"
+            )
+            return
+        }
+
+        rideStopping = true
+        stopAccelerometer()
+        stopGyroscope()
 
         currentRide?.let { ride ->
 
@@ -206,20 +288,15 @@ class RideManager(
                         ).toInt()
 
             ride.ride.stopReason =
-                "MANUAL"
+                stopReason.name
 
 
             // -----------------------------------------------------
             // Save final ride.json
             // -----------------------------------------------------
 
-            RideFolderManager(context)
-                .updateRide(ride)
-
-
-            Log.d(
-                "RoadPulse",
-                "Ride Completed : ${ride.ride.rideId}"
+            RoadPulseLogger.ride(
+                "Recording RIDE_STOPPED event | Reason = ${stopReason.name}"
             )
 
             recordEvent(
@@ -227,12 +304,23 @@ class RideManager(
                 eventValue = ride.ride.stopReason
             )
 
+            RoadPulseLogger.ride(
+                "RIDE_STOPPED event recorded | Reason = ${stopReason.name}"
+            )
+            RideFolderManager(context)
+                .updateRide(ride)
+
+            RoadPulseLogger.ride(
+                "Ride Completed : ${ride.ride.rideId} | Stop Reason = ${stopReason.name}"
+            )
+
         }
-
-
 
         gpsCsvWriter = null
         eventsCsvWriter = null
+        accelerometerCsvWriter = null
+        gyroscopeCsvWriter = null
+
     }
 
 
@@ -274,11 +362,35 @@ class RideManager(
 
     fun startAccelerometer() {
         accelerometerManager?.start()
+        RoadPulseLogger.accel(
+            "Accelerometer starting"
+        )
     }
 
     fun stopAccelerometer() {
         accelerometerManager?.stop()
         accelerometerManager = null
+
+        RoadPulseLogger.accel(
+            "Accelerometer stopped"
+        )
+    }
+
+    fun startGyroscope() {
+        gyroscopeManager?.start()
+
+        RoadPulseLogger.gyro(
+            "Gyroscope starting"
+        )
+    }
+
+    fun stopGyroscope() {
+        gyroscopeManager?.stop()
+        gyroscopeManager = null
+
+        RoadPulseLogger.gyro(
+            "Gyroscope stopped"
+        )
     }
 
     // =========================================================
@@ -287,10 +399,32 @@ class RideManager(
 
     fun getCurrentRide(): Ride? {
 
+        RoadPulseLogger.ride(
+            "getCurrentRide | ${
+                currentRide?.ride?.rideId ?: "NONE"
+            }"
+        )
+
         return currentRide
     }
 
+    // =========================================================
+    // Check RIDE Status
+    // =========================================================
+    fun getRideStatus(): RideStatus {
+        return currentRide?.ride?.status
+            ?: RideStatus.IDLE
+    }
 
+    fun isRideActive(): Boolean {
+        return getRideStatus() == RideStatus.RECORDING
+    }
+
+    fun getUnfinishedRide(): Ride? {
+
+        return RideFolderManager(context)
+            .getUnfinishedRide()
+    }
     // =========================================================
     // GET DEVICE INFO
     // =========================================================

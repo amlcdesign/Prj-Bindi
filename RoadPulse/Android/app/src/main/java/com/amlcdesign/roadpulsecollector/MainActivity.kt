@@ -14,15 +14,24 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.amlcdesign.roadpulsecollector.ui.theme.RoadPulseCollectorTheme
 import com.amlcdesign.roadpulsecollector.ui.HomeScreen
 import com.amlcdesign.roadpulsecollector.ui.RoadPulseApp
+import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        RoadPulseLogger.ui("MainActivity onCreate")
+
         enableEdgeToEdge()
         setContent {
             RoadPulseCollectorTheme {
                 RoadPulseApp()
             }
         }
+    }
+
+    override fun onDestroy() {
+        RoadPulseLogger.ui("MainActivity onDestroy")
+        super.onDestroy()
     }
 }
