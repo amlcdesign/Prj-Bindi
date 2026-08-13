@@ -163,7 +163,7 @@ data class RideInfo(
 
     var endIso: String? = null,
 
-    // Duration
+    // Duration - Int or Long
     var durationSeconds: Int = 0
 )
 

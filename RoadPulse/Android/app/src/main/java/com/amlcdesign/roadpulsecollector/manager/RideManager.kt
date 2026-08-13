@@ -1,7 +1,6 @@
 package com.amlcdesign.roadpulsecollector.manager
 
 import android.content.Context
-import android.util.Log
 import android.os.Build
 import android.provider.Settings
 
@@ -13,33 +12,56 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-import com.amlcdesign.roadpulsecollector.model.DeviceInfo
-import com.amlcdesign.roadpulsecollector.model.DataInfo
-
-import com.amlcdesign.roadpulsecollector.enums.RideStatus
 import com.amlcdesign.roadpulsecollector.enums.RideMode
+import com.amlcdesign.roadpulsecollector.enums.RideStatus
 import com.amlcdesign.roadpulsecollector.enums.StopReason
 import com.amlcdesign.roadpulsecollector.enums.VehicleType
 
+import com.amlcdesign.roadpulsecollector.model.DeviceInfo
+import com.amlcdesign.roadpulsecollector.model.EventRecord
+import com.amlcdesign.roadpulsecollector.model.GpsRecord
 import com.amlcdesign.roadpulsecollector.model.Ride
 import com.amlcdesign.roadpulsecollector.model.RideInfo
-import com.amlcdesign.roadpulsecollector.model.GpsRecord
 import com.amlcdesign.roadpulsecollector.model.VehicleInfo
-import com.amlcdesign.roadpulsecollector.model.EventRecord
 
-import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
-import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
-import com.amlcdesign.roadpulsecollector.storage.EventsCsvWriter
 import com.amlcdesign.roadpulsecollector.storage.AccelerometerCsvWriter
+import com.amlcdesign.roadpulsecollector.storage.EventsCsvWriter
+import com.amlcdesign.roadpulsecollector.storage.GpsCsvWriter
 import com.amlcdesign.roadpulsecollector.storage.GyroscopeCsvWriter
+import com.amlcdesign.roadpulsecollector.storage.RideFolderManager
 
 import com.amlcdesign.roadpulsecollector.sensor.AccelerometerManager
 import com.amlcdesign.roadpulsecollector.sensor.GyroscopeManager
 
 import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
+
+
 class RideManager(
     private val context: Context
 ) {
+
+    // =========================================================
+    // ACTIVE RIDE
+    // =========================================================
+
+    /*
+     * RideManager is the owner of the active ride lifecycle.
+     *
+     * At any point:
+     *      0 active rides
+     *              OR
+     *      1 active RECORDING ride
+     *
+     * Ride folders are NOT scanned to determine this state.
+     */
+    private var currentRide: Ride? = null
+
+    private var rideStopping = false
+
+
+    // =========================================================
+    // STORAGE / COLLECTION
+    // =========================================================
 
     private var gpsCsvWriter: GpsCsvWriter? = null
     private var eventsCsvWriter: EventsCsvWriter? = null
@@ -50,18 +72,6 @@ class RideManager(
     private var gyroscopeManager: GyroscopeManager? = null
     private var gyroscopeCsvWriter: GyroscopeCsvWriter? = null
 
-    private var rideStopping = false
-    private var currentRide: Ride? = null
-
-    init {
-        val unfinishedRide = getUnfinishedRide()
-
-        RoadPulseLogger.ride(
-            "RideManager INIT | unfinishedRide=${
-                unfinishedRide?.ride?.rideId ?: "NONE"
-            }"
-        )
-    }
 
     // =========================================================
     // START RIDE
@@ -72,19 +82,60 @@ class RideManager(
         vehicleType: VehicleType = VehicleType.CAR
     ): Ride {
 
-        if (isRideActive()) {
-            RoadPulseLogger.ride(
-                "START IGNORED | Ride already active | Ride ID = ${currentRide?.ride?.rideId}"
-            )
-            return currentRide!!
+        /*
+         * One active ride maximum.
+         *
+         * If a RECORDING ride already exists, do not create
+         * another ride and do not create another ride folder.
+         *
+         * The UI should never expose START while RECORDING,
+         * but RideManager also protects the lifecycle internally.
+         */
+        currentRide?.let { ride ->
+
+            if (ride.ride.status == RideStatus.RECORDING) {
+
+                RoadPulseLogger.ride(
+                    "RIDE START IGNORED | active=${ride.ride.rideId}"
+                )
+
+                return ride
+            }
         }
 
         rideStopping = false
+
+
+        // ---------------------------------------------------------
+        // Create Ride ID
+        // ---------------------------------------------------------
 
         val id = SimpleDateFormat(
             "yyyyMMdd_HHmmss",
             Locale.getDefault()
         ).format(Date())
+
+
+        // ---------------------------------------------------------
+        // Ride start information
+        // ---------------------------------------------------------
+
+        val startEpoch =
+            System.currentTimeMillis()
+
+        val startIso =
+            OffsetDateTime.now()
+                .format(
+                    DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                )
+
+
+        val startReason =
+            when (rideMode) {
+                RideMode.AUTO -> "AUTO_START"
+                RideMode.MANUAL -> "MANUAL"
+            }
+
 
         val rideInfo = RideInfo(
 
@@ -96,42 +147,38 @@ class RideManager(
 
             status = RideStatus.RECORDING,
 
-            startReason = "MANUAL",
+            startReason = startReason,
 
-            startEpoch = System.currentTimeMillis(),
+            startEpoch = startEpoch,
 
-            startIso = OffsetDateTime.now()
-                .format(
-                    DateTimeFormatter.ISO_OFFSET_DATE_TIME
-                )
+            startIso = startIso
         )
 
+
         val ride = Ride(
+
             device = getDeviceInfo(),
+
             vehicle = VehicleInfo(
                 vehicleType = vehicleType
             ),
+
             ride = rideInfo
         )
 
 
         // ---------------------------------------------------------
-        // Create ride folder
-        // ---------------------------------------------------------
-
-        RideFolderManager(context)
-            .createRideFolder(ride)
-
-
-        // ---------------------------------------------------------
-        // Create GPS CSV
+        // Create Ride Folder
         // ---------------------------------------------------------
 
         val rideFolder =
-            File(
-                context.getExternalFilesDir(null),
-                "RoadPulse/${ride.ride.rideId}"
-            )
+            RideFolderManager(context)
+                .createRideFolder(ride)
+
+
+        // ---------------------------------------------------------
+        // GPS CSV
+        // ---------------------------------------------------------
 
         val gpsFile =
             File(
@@ -144,9 +191,11 @@ class RideManager(
 
         gpsCsvWriter?.initialize()
 
+
         // ---------------------------------------------------------
-        // Create EVENTS CSV
+        // EVENTS CSV
         // ---------------------------------------------------------
+
         val eventsFile =
             File(
                 rideFolder,
@@ -158,8 +207,9 @@ class RideManager(
 
         eventsCsvWriter?.initialize()
 
+
         // ---------------------------------------------------------
-        // Create ACCELEROMETER Section
+        // ACCELEROMETER CSV
         // ---------------------------------------------------------
 
         val accelerometerFile =
@@ -175,18 +225,32 @@ class RideManager(
 
         accelerometerCsvWriter?.initialize()
 
-        //Manager
+
+        // ---------------------------------------------------------
+        // ACCELEROMETER MANAGER
+        // ---------------------------------------------------------
+
         accelerometerManager =
             AccelerometerManager(context) { record ->
 
                 accelerometerCsvWriter?.write(record)
 
-                currentRide?.data?.accelerometerSamples =
-                    (currentRide?.data?.accelerometerSamples ?: 0) + 1
+                currentRide?.let { activeRide ->
+
+                    if (
+                        activeRide.ride.status ==
+                        RideStatus.RECORDING
+                    ) {
+
+                        activeRide.data.accelerometerSamples =
+                            activeRide.data.accelerometerSamples + 1
+                    }
+                }
             }
 
+
         // ---------------------------------------------------------
-        // GYROSCOPE Section
+        // GYROSCOPE CSV
         // ---------------------------------------------------------
 
         val gyroscopeFile =
@@ -202,39 +266,59 @@ class RideManager(
 
         gyroscopeCsvWriter?.initialize()
 
-        // Manager
+
+        // ---------------------------------------------------------
+        // GYROSCOPE MANAGER
+        // ---------------------------------------------------------
+
         gyroscopeManager =
             GyroscopeManager(context) { record ->
 
                 gyroscopeCsvWriter?.write(record)
 
-                currentRide?.data?.gyroscopeSamples =
-                    (currentRide?.data?.gyroscopeSamples ?: 0) + 1
+                currentRide?.let { activeRide ->
+
+                    if (
+                        activeRide.ride.status ==
+                        RideStatus.RECORDING
+                    ) {
+
+                        activeRide.data.gyroscopeSamples =
+                            activeRide.data.gyroscopeSamples + 1
+                    }
+                }
             }
 
+
         // ---------------------------------------------------------
-        // Store current ride
+        // ACTIVE RIDE
         // ---------------------------------------------------------
 
         currentRide = ride
+
+
+        // ---------------------------------------------------------
+        // RIDE START EVENT
+        // ---------------------------------------------------------
 
         recordEvent(
             eventType = "RIDE_STARTED",
             eventValue = rideMode.name
         )
 
+
         RoadPulseLogger.ride(
-            "Ride Started : ${ride.ride.rideId}"
+            "RIDE STARTED | id=${ride.ride.rideId} | mode=${rideMode.name}"
         )
 
+
         // ---------------------------------------------------------
-        // Start accelerometer
-        // Start gyroscope
-        // Storage + currentRide are now ready
+        // Start sensors
         // ---------------------------------------------------------
 
         startAccelerometer()
         startGyroscope()
+
 
         return ride
     }
@@ -244,83 +328,127 @@ class RideManager(
     // STOP RIDE
     // =========================================================
 
-    fun stopRide(stopReason: StopReason) {
+    fun stopRide(
+        stopReason: StopReason
+    ) {
 
-        RoadPulseLogger.ride(
-            "STOP RIDE CALLED | reason=$stopReason"
-        )
+        val ride =
+            currentRide
+                ?: return
 
-        if (currentRide == null) {
-            RoadPulseLogger.ride(
-                "STOP IGNORED | No current ride | Reason = ${stopReason.name}"
-            )
+
+        if (
+            ride.ride.status !=
+            RideStatus.RECORDING
+        ) {
             return
         }
+
+
         if (rideStopping) {
-            RoadPulseLogger.ride(
-                "STOP IGNORED | No current ride | Reason = ${stopReason.name}"
-            )
             return
         }
+
 
         rideStopping = true
+
+
+        val rideId =
+            ride.ride.rideId
+
+
+        RoadPulseLogger.ride(
+            "RIDE STOP | id=$rideId | reason=${stopReason.name}"
+        )
+
+
+        // ---------------------------------------------------------
+        // Stop sensors first
+        // ---------------------------------------------------------
+
         stopAccelerometer()
         stopGyroscope()
 
-        currentRide?.let { ride ->
 
-            ride.ride.endEpoch =
-                System.currentTimeMillis()
+        // ---------------------------------------------------------
+        // Finalize ride metadata
+        // ---------------------------------------------------------
 
-            ride.ride.endIso =
-                OffsetDateTime.now()
-                    .format(
-                        DateTimeFormatter.ISO_OFFSET_DATE_TIME
-                    )
+        val endEpoch =
+            System.currentTimeMillis()
 
-            ride.ride.status =
-                RideStatus.COMPLETED
-
-            ride.ride.durationSeconds =
-                (
-                        (ride.ride.endEpoch!! -
-                                ride.ride.startEpoch) / 1000
-                        ).toInt()
-
-            ride.ride.stopReason =
-                stopReason.name
+        val endIso =
+            OffsetDateTime.now()
+                .format(
+                    DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                )
 
 
-            // -----------------------------------------------------
-            // Save final ride.json
-            // -----------------------------------------------------
+        ride.ride.endEpoch =
+            endEpoch
 
-            RoadPulseLogger.ride(
-                "Recording RIDE_STOPPED event | Reason = ${stopReason.name}"
-            )
+        ride.ride.endIso =
+            endIso
 
-            recordEvent(
-                eventType = "RIDE_STOPPED",
-                eventValue = ride.ride.stopReason
-            )
+        ride.ride.status =
+            RideStatus.COMPLETED
 
-            RoadPulseLogger.ride(
-                "RIDE_STOPPED event recorded | Reason = ${stopReason.name}"
-            )
-            RideFolderManager(context)
-                .updateRide(ride)
+        ride.ride.durationSeconds =
+            (
+                    (endEpoch - ride.ride.startEpoch) / 1000
+                    ).toInt()
 
-            RoadPulseLogger.ride(
-                "Ride Completed : ${ride.ride.rideId} | Stop Reason = ${stopReason.name}"
-            )
+        ride.ride.stopReason =
+            stopReason.name
 
-        }
+
+        // ---------------------------------------------------------
+        // Record STOP event
+        // ---------------------------------------------------------
+
+        recordEvent(
+            eventType = "RIDE_STOPPED",
+            eventValue = stopReason.name
+        )
+
+
+        // ---------------------------------------------------------
+        // Save final ride.json
+        // ---------------------------------------------------------
+
+        RideFolderManager(context)
+            .updateRide(ride)
+
+
+        // ---------------------------------------------------------
+        // Release storage references
+        // ---------------------------------------------------------
 
         gpsCsvWriter = null
         eventsCsvWriter = null
         accelerometerCsvWriter = null
         gyroscopeCsvWriter = null
 
+
+        // ---------------------------------------------------------
+        // Active ride is now finished.
+        //
+        // History will be handled by the appropriate repository /
+        // history layer later.
+        //
+        // RideManager must NOT keep a COMPLETED ride as the
+        // current active ride.
+        // ---------------------------------------------------------
+
+        currentRide = null
+
+
+        rideStopping = false
+
+
+        RoadPulseLogger.ride(
+            "RIDE COMPLETED | id=$rideId | duration=${ride.ride.durationSeconds}s"
+        )
     }
 
 
@@ -330,10 +458,16 @@ class RideManager(
 
     fun incrementGpsPointCount() {
 
-        currentRide?.data?.let {
+        currentRide?.let { ride ->
 
-            it.gpsPoints =
-                it.gpsPoints + 1
+            if (
+                ride.ride.status ==
+                RideStatus.RECORDING
+            ) {
+
+                ride.data.gpsPoints =
+                    ride.data.gpsPoints + 1
+            }
         }
     }
 
@@ -346,13 +480,25 @@ class RideManager(
         record: GpsRecord
     ) {
 
+        val ride =
+            currentRide
+                ?: return
+
+
+        if (
+            ride.ride.status !=
+            RideStatus.RECORDING
+        ) {
+            return
+        }
+
+
         gpsCsvWriter?.write(record)
 
-        currentRide?.data?.let {
 
-            it.gpsPoints =
-                it.gpsPoints + 1
-        }
+        ride.data.gpsPoints =
+            ride.data.gpsPoints + 1
+
 
         // Update accelerometer sampling profile
         accelerometerManager?.updateSpeed(
@@ -360,15 +506,25 @@ class RideManager(
         )
     }
 
+
+    // =========================================================
+    // ACCELEROMETER
+    // =========================================================
+
     fun startAccelerometer() {
+
         accelerometerManager?.start()
+
         RoadPulseLogger.accel(
-            "Accelerometer starting"
+            "Accelerometer started"
         )
     }
 
+
     fun stopAccelerometer() {
+
         accelerometerManager?.stop()
+
         accelerometerManager = null
 
         RoadPulseLogger.accel(
@@ -376,16 +532,25 @@ class RideManager(
         )
     }
 
+
+    // =========================================================
+    // GYROSCOPE
+    // =========================================================
+
     fun startGyroscope() {
+
         gyroscopeManager?.start()
 
         RoadPulseLogger.gyro(
-            "Gyroscope starting"
+            "Gyroscope started"
         )
     }
 
+
     fun stopGyroscope() {
+
         gyroscopeManager?.stop()
+
         gyroscopeManager = null
 
         RoadPulseLogger.gyro(
@@ -393,47 +558,47 @@ class RideManager(
         )
     }
 
+
     // =========================================================
     // CURRENT RIDE
     // =========================================================
 
     fun getCurrentRide(): Ride? {
 
-        RoadPulseLogger.ride(
-            "getCurrentRide | ${
-                currentRide?.ride?.rideId ?: "NONE"
-            }"
-        )
-
         return currentRide
     }
 
+
     // =========================================================
-    // Check RIDE Status
+    // RIDE STATUS
     // =========================================================
+
     fun getRideStatus(): RideStatus {
+
         return currentRide?.ride?.status
             ?: RideStatus.IDLE
     }
 
+
     fun isRideActive(): Boolean {
-        return getRideStatus() == RideStatus.RECORDING
+
+        return getRideStatus() ==
+                RideStatus.RECORDING
     }
 
-    fun getUnfinishedRide(): Ride? {
 
-        return RideFolderManager(context)
-            .getUnfinishedRide()
-    }
     // =========================================================
-    // GET DEVICE INFO
+    // DEVICE INFO
     // =========================================================
+
     private fun getDeviceInfo(): DeviceInfo {
 
-        val deviceId = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ANDROID_ID
-        ) ?: ""
+        val deviceId =
+            Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ANDROID_ID
+            ) ?: ""
+
 
         return DeviceInfo(
 
@@ -449,12 +614,24 @@ class RideManager(
         )
     }
 
+
+    // =========================================================
+    // RECORD EVENT
+    // =========================================================
+
     private fun recordEvent(
         eventType: String,
         eventValue: String = ""
     ) {
 
-        val now = System.currentTimeMillis()
+        val writer =
+            eventsCsvWriter
+                ?: return
+
+
+        val now =
+            System.currentTimeMillis()
+
 
         val timestampIso =
             OffsetDateTime.now()
@@ -462,14 +639,19 @@ class RideManager(
                     DateTimeFormatter.ISO_OFFSET_DATE_TIME
                 )
 
-        eventsCsvWriter?.write(
+
+        writer.write(
+
             EventRecord(
+
                 timestampEpoch = now,
+
                 timestampIso = timestampIso,
+
                 eventType = eventType,
+
                 eventValue = eventValue
             )
         )
     }
-
 }

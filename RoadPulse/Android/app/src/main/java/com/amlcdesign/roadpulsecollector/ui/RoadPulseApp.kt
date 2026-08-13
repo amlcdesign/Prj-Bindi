@@ -1,7 +1,5 @@
 package com.amlcdesign.roadpulsecollector.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,9 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 
-import com.amlcdesign.roadpulsecollector.R
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +39,9 @@ import kotlinx.coroutines.launch
 
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+import com.amlcdesign.roadpulsecollector.R
 
 private enum class MainTab {
     HOME,
@@ -62,6 +61,12 @@ private val RoadPulseRed = Color(0xFFD32F2F)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoadPulseApp() {
+
+    val rideControllerViewModel: RideControllerViewModel =
+        viewModel()
+
+    val rideController =
+        rideControllerViewModel.rideController
 
     var selectedTab by remember {
         mutableStateOf(MainTab.HOME)
@@ -121,7 +126,8 @@ fun RoadPulseApp() {
 
                     MainTab.HOME -> {
                         HomeScreen(
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            rideController = rideController
                         )
                     }
 

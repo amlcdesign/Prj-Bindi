@@ -2,54 +2,87 @@ package com.amlcdesign.roadpulsecollector.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.location.Location
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.runtime.DisposableEffect
-import com.amlcdesign.roadpulsecollector.ui.RideControllerViewModel
+
+import com.amlcdesign.roadpulsecollector.enums.RideMode
+import com.amlcdesign.roadpulsecollector.enums.RideStatus
+import com.amlcdesign.roadpulsecollector.enums.VehicleType
 
 import com.amlcdesign.roadpulsecollector.gps.GpsManager
 
-import com.amlcdesign.roadpulsecollector.manager.RideController
 import com.amlcdesign.roadpulsecollector.manager.AutoRideMonitor
-
-import com.amlcdesign.roadpulsecollector.enums.RideMode
-//import com.amlcdesign.roadpulsecollector.enums.StopReason
-import com.amlcdesign.roadpulsecollector.enums.VehicleType
+import com.amlcdesign.roadpulsecollector.manager.RideController
 
 import com.amlcdesign.roadpulsecollector.utils.RoadPulseLogger
+
+
 @Composable
-fun HomeScreen( modifier: Modifier = Modifier) {
+fun HomeScreen(
+    modifier: Modifier = Modifier,
+    rideController: RideController
+) {
 
     val context = LocalContext.current
 
-    val rideControllerViewModel: RideControllerViewModel =
-        viewModel()
 
-    val rideController =
-        rideControllerViewModel.rideController
+    // =========================================================
+    // RIDE STATE
+    // =========================================================
 
-    var isRecording by remember {
-        mutableStateOf(false)
+    /*
+     * This is only a Compose refresh trigger.
+     *
+     * It is NOT the source of truth for ride status.
+     * The source of truth remains RideController/RideManager.
+     */
+    var rideStateVersion by remember {
+        mutableIntStateOf(0)
     }
 
-    var rideId by remember {
-        mutableStateOf("")
-    }
 
-    LaunchedEffect(Unit) {
-        isRecording = rideController.isRideActive()
-    }
+    /*
+     * Always obtain the current ride state from Controller.
+     */
+    val rideStatus =
+        remember(rideStateVersion) {
+            rideController.getRideStatus()
+        }
 
+
+    val currentRide =
+        remember(rideStateVersion) {
+            rideController.getCurrentRide()
+        }
+
+
+    val isRecording =
+        rideStatus == RideStatus.RECORDING
+
+
+    val rideId =
+        currentRide?.ride?.rideId ?: ""
+
+
+    // =========================================================
+    // LIVE GPS DATA
+    // =========================================================
+
+    /*
+     * These remain UI state because they represent the latest
+     * sensor observations.
+     */
     var latitude by remember {
         mutableStateOf("--")
     }
@@ -66,6 +99,11 @@ fun HomeScreen( modifier: Modifier = Modifier) {
         mutableStateOf("--")
     }
 
+
+    // =========================================================
+    // USER SETTINGS
+    // =========================================================
+
     var rideMode by remember {
         mutableStateOf(RideMode.MANUAL)
     }
@@ -74,51 +112,56 @@ fun HomeScreen( modifier: Modifier = Modifier) {
         mutableStateOf(VehicleType.CAR)
     }
 
-    //RideController can automatically start the ride,
-    // but HomeScreen doesn't know that happened.
-    // we need to tell HomeScreen when the ride starts.
 
-    //now that RideController is surviving rotation through the ViewModel,
-    // we should avoid registering the callback repeatedly every time HomeScreen recomposes.
-    /*
-    LaunchedEffect(Unit) {
-        rideController.setOnRideStarted { ride ->
-            rideId = ride.ride.rideId
-            isRecording = true
-        }
-    }
-    */
+    // =========================================================
+    // LOG CONTROLLER INSTANCE
+    // =========================================================
 
     RoadPulseLogger.ui(
         "HomeScreen RideController | hash=${rideController.hashCode()}"
     )
 
-    DisposableEffect(rideController) {
-        rideController.setOnRideStarted { ride ->
-            rideId = ride.ride.rideId
-            isRecording = true
-        }
 
-        onDispose {
-            // Nothing to clean up yet
-        }
-    }
-
-
+    // =========================================================
+    // AUTO RIDE MONITOR
+    // =========================================================
 
     val autoRideMonitor = remember {
+
         AutoRideMonitor {
-            rideController.setMode(
-                RideMode.AUTO
-            )
 
-            val ride = rideController.startRide()
+            /*
+             * Auto Start is only allowed when the application
+             * is currently IDLE.
+             */
+            if (
+                rideController.getRideStatus() ==
+                RideStatus.IDLE
+            ) {
 
-            rideId = ride.ride.rideId
+                rideController.setMode(
+                    RideMode.AUTO
+                )
 
-            isRecording = true
+                val ride =
+                    rideController.startRide(
+                        vehicleType = vehicleType
+                    )
+
+                /*
+                 * Controller is now authoritative.
+                 *
+                 * Trigger Compose to re-read the state.
+                 */
+                rideStateVersion++
+            }
         }
     }
+
+
+    // =========================================================
+    // GPS MANAGER
+    // =========================================================
 
     val gpsManager = remember {
 
@@ -150,11 +193,15 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                     record.accuracyMeters
                 )
 
-            // AUTO MODE:
-            // monitor movement before ride starts
+
+            // -------------------------------------------------
+            // AUTO MODE
+            // -------------------------------------------------
+
             if (
                 rideMode == RideMode.AUTO &&
-                !isRecording
+                rideController.getRideStatus() ==
+                RideStatus.IDLE
             ) {
 
                 autoRideMonitor.processLocation(
@@ -162,8 +209,19 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                 )
             }
 
-            // Record GPS only after ride starts
-            if (isRecording) {
+
+            // -------------------------------------------------
+            // RECORD GPS
+            // -------------------------------------------------
+
+            /*
+             * Do not use a local isRecording flag as the
+             * authority. Ask Controller.
+             */
+            if (
+                rideController.getRideStatus() ==
+                RideStatus.RECORDING
+            ) {
 
                 rideController.recordGps(
                     record
@@ -171,6 +229,11 @@ fun HomeScreen( modifier: Modifier = Modifier) {
             }
         }
     }
+
+
+    // =========================================================
+    // LOCATION PERMISSION
+    // =========================================================
 
     val locationPermissionLauncher =
         rememberLauncherForActivityResult(
@@ -187,11 +250,20 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                     Manifest.permission.ACCESS_COARSE_LOCATION
                 ] == true
 
-            if (fineLocation || coarseLocation) {
+
+            if (
+                fineLocation ||
+                coarseLocation
+            ) {
 
                 gpsManager.start()
             }
         }
+
+
+    // =========================================================
+    // UI
+    // =========================================================
 
     Surface(
         modifier = Modifier.fillMaxSize()
@@ -202,13 +274,17 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                 .fillMaxSize()
                 .padding(24.dp),
 
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+            horizontalAlignment =
+                Alignment.CenterHorizontally,
+
+            verticalArrangement =
+                Arrangement.SpaceBetween
         ) {
 
             Spacer(
                 modifier = Modifier.height(40.dp)
             )
+
 
             Text(
                 text = "RoadPulse",
@@ -216,9 +292,15 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                     MaterialTheme.typography.headlineMedium
             )
 
+
             Spacer(
                 modifier = Modifier.height(24.dp)
             )
+
+
+            // -------------------------------------------------
+            // STATUS
+            // -------------------------------------------------
 
             Text(
                 text =
@@ -228,39 +310,62 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                         "🟢 Idle"
             )
 
+
             Spacer(
                 modifier = Modifier.height(16.dp)
             )
 
+
+            // -------------------------------------------------
+            // VEHICLE
+            // -------------------------------------------------
+
             Text(
                 text = "Vehicle",
-                style = MaterialTheme.typography.titleMedium
+                style =
+                    MaterialTheme.typography.titleMedium
             )
 
+
             Row(
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment =
+                    Alignment.CenterVertically
             ) {
 
                 RadioButton(
-                    selected = vehicleType == VehicleType.CAR,
+                    selected =
+                        vehicleType ==
+                                VehicleType.CAR,
+
                     onClick = {
+
                         if (!isRecording) {
-                            vehicleType = VehicleType.CAR
+
+                            vehicleType =
+                                VehicleType.CAR
                         }
                     }
                 )
 
                 Text("Car")
 
+
                 Spacer(
                     modifier = Modifier.width(16.dp)
                 )
 
+
                 RadioButton(
-                    selected = vehicleType == VehicleType.BIKE,
+                    selected =
+                        vehicleType ==
+                                VehicleType.BIKE,
+
                     onClick = {
+
                         if (!isRecording) {
-                            vehicleType = VehicleType.BIKE
+
+                            vehicleType =
+                                VehicleType.BIKE
                         }
                     }
                 )
@@ -268,61 +373,81 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                 Text("Bike")
             }
 
+
+            // -------------------------------------------------
+            // RIDE MODE
+            // -------------------------------------------------
+
             Text(
                 text = "Ride Mode",
-                style = MaterialTheme.typography.titleMedium
+                style =
+                    MaterialTheme.typography.titleMedium
             )
 
+
             Row(
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment =
+                    Alignment.CenterVertically
             ) {
 
-                // mode can only be changed while the app is idle.
                 RadioButton(
-                    selected = rideMode == RideMode.AUTO,
+                    selected =
+                        rideMode ==
+                                RideMode.AUTO,
+
                     onClick = {
 
                         if (!isRecording) {
 
-                            rideMode = RideMode.AUTO
+                            rideMode =
+                                RideMode.AUTO
 
                             val hasPermission =
                                 ContextCompat.checkSelfPermission(
                                     context,
                                     Manifest.permission.ACCESS_FINE_LOCATION
-                                ) == PackageManager.PERMISSION_GRANTED
+                                ) ==
+                                        PackageManager.PERMISSION_GRANTED
 
-                            if (rideMode == RideMode.MANUAL) {
-                                if (hasPermission) {
-                                    //if AUTO GPS is already started
-                                    gpsManager.start()
-                                } else {
-                                    locationPermissionLauncher.launch(
-                                        arrayOf(
-                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
+                            if (hasPermission) {
+
+                                gpsManager.start()
+
+                            } else {
+
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
                                     )
-                                }
+                                )
                             }
-
                         }
                     }
                 )
 
                 Text("Auto Mode")
 
+
                 Spacer(
                     modifier = Modifier.width(16.dp)
                 )
 
+
                 RadioButton(
-                    selected = rideMode == RideMode.MANUAL,
+                    selected =
+                        rideMode ==
+                                RideMode.MANUAL,
+
                     onClick = {
 
                         if (!isRecording) {
-                            rideMode = RideMode.MANUAL
+
+                            rideMode =
+                                RideMode.MANUAL
+
                             autoRideMonitor.stop()
+
                             gpsManager.stop()
                         }
                     }
@@ -331,73 +456,127 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                 Text("Manual Mode")
             }
 
+
             Spacer(
                 modifier = Modifier.height(16.dp)
             )
 
+
+            // -------------------------------------------------
+            // RIDE ID
+            // -------------------------------------------------
+
             Text("Ride ID")
 
-            Text(rideId)
+            Text(
+                text = rideId
+            )
+
 
             Spacer(
                 modifier = Modifier.height(24.dp)
             )
 
+
             HorizontalDivider()
+
 
             Spacer(
                 modifier = Modifier.height(16.dp)
             )
 
+
+            // -------------------------------------------------
+            // GPS
+            // -------------------------------------------------
+
             Text("GPS")
+
 
             Spacer(
                 modifier = Modifier.height(8.dp)
             )
 
-            Text("Latitude : $latitude")
 
-            Text("Longitude : $longitude")
+            Text(
+                text = "Latitude : $latitude"
+            )
 
-            Text("Speed : $speed")
+            Text(
+                text = "Longitude : $longitude"
+            )
 
-            Text("Accuracy : $accuracy")
+            Text(
+                text = "Speed : $speed"
+            )
+
+            Text(
+                text = "Accuracy : $accuracy"
+            )
+
 
             Spacer(
                 modifier = Modifier.height(32.dp)
             )
 
+
+            // -------------------------------------------------
+            // START / STOP
+            // -------------------------------------------------
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+
+                horizontalArrangement =
+                    Arrangement.spacedBy(12.dp),
+
+                verticalAlignment =
+                    Alignment.CenterVertically
             ) {
+
+                // -------------------------------------------------
+                // START
+                // -------------------------------------------------
+
                 Button(
                     enabled = !isRecording,
+
                     onClick = {
 
                         val hasPermission =
                             ContextCompat.checkSelfPermission(
                                 context,
                                 Manifest.permission.ACCESS_FINE_LOCATION
-                            ) == PackageManager.PERMISSION_GRANTED
+                            ) ==
+                                    PackageManager.PERMISSION_GRANTED
 
-                        rideController.setMode(rideMode)
 
-                        val ride =
-                            rideController.startRide(
-                                vehicleType = vehicleType
-                            )
+                        rideController.setMode(
+                            rideMode
+                        )
 
-                        rideId = ride.ride.rideId
 
-                        isRecording = true
+                        rideController.startRide(
+                            vehicleType =
+                                vehicleType
+                        )
+
+
+                        /*
+                         * Controller is authoritative.
+                         * Trigger UI refresh.
+                         */
+                        rideStateVersion++
+
 
                         if (hasPermission) {
+
                             gpsManager.start()
+
                         } else {
+
                             locationPermissionLauncher.launch(
                                 arrayOf(
                                     Manifest.permission.ACCESS_FINE_LOCATION,
@@ -407,20 +586,41 @@ fun HomeScreen( modifier: Modifier = Modifier) {
                         }
                     }
                 ) {
+
                     Text("START RIDE")
                 }
 
+
+                // -------------------------------------------------
+                // STOP
+                // -------------------------------------------------
+
                 Button(
                     enabled = isRecording,
+
                     onClick = {
+
                         gpsManager.stop()
+
                         rideController.stopRide()
-                        isRecording = false
+
+
+                        /*
+                         * RideManager now sets currentRide = null.
+                         *
+                         * Refresh UI from Controller so:
+                         *
+                         * Status → IDLE
+                         * Ride ID → blank
+                         */
+                        rideStateVersion++
                     },
+
                     modifier = Modifier
                         .weight(1f)
                         .height(52.dp)
                 ) {
+
                     Text("STOP RIDE")
                 }
             }
